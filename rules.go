@@ -11,6 +11,7 @@ package yara
 #include <yara.h>
 
 int stdScanCallback(int, void*, void*);
+int customScanCallback(int, void*, void*);
 */
 import "C"
 import (
@@ -125,7 +126,84 @@ const (
 	ScanFlagsProcessMemory = C.SCAN_FLAGS_PROCESS_MEMORY
 )
 
-// ScanMem scans an in-memory buffer using the ruleset.
+type ScanCallbackMessageType int
+
+const (
+	ScanRuleMatching    ScanCallbackMessageType = C.CALLBACK_MSG_RULE_MATCHING
+	ScanRuleNotMatching                         = C.CALLBACK_MSG_RULE_NOT_MATCHING
+	ScanImportModule                            = C.CALLBACK_MSG_IMPORT_MODULE
+	ScanModuleImported                          = C.CALLBACK_MSG_MODULE_IMPORTED
+	ScanFinished                                = C.CALLBACK_MSG_SCAN_FINISHED
+)
+
+var (
+	ErrScanAbort = errors.New("Callback function requested abort")
+	ErrScanError = errors.New("Callback function signalled error")
+)
+
+// ScanCallbackFunc is the type of the function that is used with the
+// ScanFileCallback, ScanMemCallback, ScanProcCallback,
+// ScanFileDescriptorCallback functions.
+//
+// The type of messageData depends on messageType: For
+// ScanRuleMatching, ScanRuleNotMatching types, messageDaa is a Rule
+// object. For ScanImportModule, messageData is a *ModuleImport. For
+// ScanFinished, messageData is nil.
+//
+// For ScanModuleImported, messageData is a pointer to the
+// YR_OBJECT_STRUCTURE provided by YARA. This is subject to change.
+//
+// The return value is used by YARA to determine how to continue the
+// scan.
+type ScanCallbackFunc func(messageType ScanCallbackMessageType, messageData interface{}) error
+
+type ModuleImport struct {
+	Name string
+	buf  []byte
+}
+
+func callbackErrorCode(err error) C.int {
+	if err == ErrScanAbort {
+		return C.CALLBACK_ABORT
+	} else if err != nil {
+		return C.CALLBACK_ERROR
+	}
+	return C.CALLBACK_CONTINUE
+}
+
+//export customScanCallback
+func customScanCallback(message C.int, messageData, userData unsafe.Pointer) C.int {
+	callbackFn := callbackData.Get(*(*uintptr)(userData)).(ScanCallbackFunc)
+	var data interface{}
+	switch message {
+	case C.CALLBACK_MSG_RULE_MATCHING, C.CALLBACK_MSG_RULE_NOT_MATCHING:
+		data = Rule{(*C.YR_RULE)(messageData)}
+	case C.CALLBACK_MSG_IMPORT_MODULE:
+		mi := ModuleImport{
+			Name: C.GoString((*C.YR_MODULE_IMPORT)(messageData).module_name)}
+		if err := callbackFn(ScanCallbackMessageType(message), &mi); err != nil {
+			return callbackErrorCode(err)
+		}
+		sz := C.size_t(len(mi.buf))
+		(*C.YR_MODULE_IMPORT)(messageData).module_data_size = sz
+		if sz > 0 {
+			(*C.YR_MODULE_IMPORT)(messageData).module_data =
+				C.malloc(C.size_t(len(mi.buf)))
+			C.memcpy((*C.YR_MODULE_IMPORT)(messageData).module_data,
+				unsafe.Pointer(&mi.buf[0]),
+				sz)
+		}
+		return C.CALLBACK_CONTINUE
+		// TODO: C.CALLBACK_MSG_MODULE_IMPORTED, handle *C.YR_OBJECT_STRUCTURE
+	case C.CALLBACK_MSG_SCAN_FINISHED:
+		fallthrough
+	default:
+		data = messageData
+	}
+	return callbackErrorCode(callbackFn(ScanCallbackMessageType(message), data))
+}
+
+// ScanMem scans an in-memory buffer with the ruleset. It returns a list of rules that matched.
 func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration) (matches []MatchRule, err error) {
 	var ptr *C.uint8_t
 	if len(buf) > 0 {
@@ -145,7 +223,29 @@ func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration) (mat
 	return
 }
 
-// ScanFile scans a file using the ruleset.
+// ScanMemCallback scans an in-memory buffer with the ruleset. Events
+// such as matched rules are passed to callbackFn.
+func (r *Rules) ScanMemCallback(buf []byte, flags ScanFlags, timeout time.Duration, callbackFn ScanCallbackFunc) (err error) {
+	var ptr *C.uint8_t
+	if len(buf) > 0 {
+		ptr = (*C.uint8_t)(unsafe.Pointer(&(buf[0])))
+	}
+	id := callbackData.Put(callbackFn)
+	defer callbackData.Delete(id)
+	err = newError(C.yr_rules_scan_mem(
+		r.cptr,
+		ptr,
+		C.size_t(len(buf)),
+		C.int(flags),
+		C.YR_CALLBACK_FUNC(C.customScanCallback),
+		unsafe.Pointer(&id),
+		C.int(timeout/time.Second)))
+	keepAlive(r)
+	return
+}
+
+// ScanFile scans a file with the ruleset. It returns a list of rules
+// that matched.
 func (r *Rules) ScanFile(filename string, flags ScanFlags, timeout time.Duration) (matches []MatchRule, err error) {
 	cfilename := C.CString(filename)
 	defer C.free(unsafe.Pointer(cfilename))
@@ -162,7 +262,26 @@ func (r *Rules) ScanFile(filename string, flags ScanFlags, timeout time.Duration
 	return
 }
 
-// ScanProc scans a live process using the ruleset.
+// ScanFileCallback scans a file with the ruleset. Events such as
+// matched rules are passed to callbackFn.
+func (r *Rules) ScanFileCallback(filename string, flags ScanFlags, timeout time.Duration, callbackFn ScanCallbackFunc) (err error) {
+	cfilename := C.CString(filename)
+	defer C.free(unsafe.Pointer(cfilename))
+	id := callbackData.Put(callbackFn)
+	defer callbackData.Delete(id)
+	err = newError(C.yr_rules_scan_file(
+		r.cptr,
+		cfilename,
+		C.int(flags),
+		C.YR_CALLBACK_FUNC(C.customScanCallback),
+		unsafe.Pointer(&id),
+		C.int(timeout/time.Second)))
+	keepAlive(r)
+	return
+}
+
+// ScanProc scans a live process with the ruleset. It returns a list
+// of rules that matched.
 func (r *Rules) ScanProc(pid int, flags int, timeout time.Duration) (matches []MatchRule, err error) {
 	id := callbackData.Put(&matches)
 	defer callbackData.Delete(id)
@@ -171,6 +290,22 @@ func (r *Rules) ScanProc(pid int, flags int, timeout time.Duration) (matches []M
 		C.int(pid),
 		C.int(flags),
 		C.YR_CALLBACK_FUNC(C.stdScanCallback),
+		unsafe.Pointer(&id),
+		C.int(timeout/time.Second)))
+	keepAlive(r)
+	return
+}
+
+// ScanProcCallback scans a live process with the ruleset. Events such
+// as matched rules are passed to callbackFn.
+func (r *Rules) ScanProcCallback(pid int, flags int, timeout time.Duration, callbackFn ScanCallbackFunc) (err error) {
+	id := callbackData.Put(callbackFn)
+	defer callbackData.Delete(id)
+	err = newError(C.yr_rules_scan_proc(
+		r.cptr,
+		C.int(pid),
+		C.int(flags),
+		C.YR_CALLBACK_FUNC(C.customScanCallback),
 		unsafe.Pointer(&id),
 		C.int(timeout/time.Second)))
 	keepAlive(r)

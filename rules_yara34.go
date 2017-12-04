@@ -38,8 +38,24 @@ import (
 	"unsafe"
 )
 
-// ScanFileDescriptor scans a file using the ruleset.
+// ScanFileDescriptor scans a file with the ruleset. It returns a list
+// of rules that matched.
 func (r *Rules) ScanFileDescriptor(fd uintptr, flags ScanFlags, timeout time.Duration) (matches []MatchRule, err error) {
+	id := callbackData.Put(&matches)
+	defer callbackData.Delete(id)
+	err = newError(C._yr_rules_scan_fd(
+		r.cptr,
+		C.int(fd),
+		C.int(flags),
+		C.YR_CALLBACK_FUNC(C.stdScanCallback),
+		unsafe.Pointer(&id),
+		C.int(timeout/time.Second)))
+	keepAlive(r)
+	return
+}
+
+// ScanFileDescriptor scans a file with the ruleset.
+func (r *Rules) ScanFileDescriptorCallback(fd uintptr, flags ScanFlags, timeout time.Duration) (matches []MatchRule, err error) {
 	id := callbackData.Put(&matches)
 	defer callbackData.Delete(id)
 	err = newError(C._yr_rules_scan_fd(

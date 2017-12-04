@@ -94,6 +94,25 @@ func assertFalseRules(t *testing.T, rules []string, data []byte) {
 	}
 }
 
+func TestCallback(t *testing.T) {
+	r := makeRules(t, "rule t { condition: true } rule f { condition: false }")
+	results := make(map[string]bool)
+	if err := r.ScanMemCallback([]byte(" abc "), 0, 0,
+		func(msgType ScanCallbackMessageType, msg interface{}) (err error) {
+			if msgType == ScanRuleMatching || msgType == ScanRuleNotMatching {
+				r := msg.(Rule)
+				results[r.Identifier()] = (msgType == ScanRuleMatching)
+			}
+			return
+		},
+	); err != nil {
+		t.Error(err)
+	}
+	if !reflect.DeepEqual(results, map[string]bool{"t": true, "f": false}) {
+		t.Errorf("callback function set unexpected result: %#v", results)
+	}
+}
+
 func TestLoad(t *testing.T) {
 	r, err := LoadRules("testrules.yac")
 	if r == nil || err != nil {
