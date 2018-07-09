@@ -20,7 +20,7 @@ func (c *Compiler) LoadAtomQualityTable(path string, qualityWarningThreshold uin
 	err := newError(C.yr_compiler_load_atom_quality_table(
 		c.compiler.cptr,
 		C.CString(path),
-		C.uint8_t(qualityWarningThreshold)),
+		C.uchar(qualityWarningThreshold)),
 	)
 	keepAlive(c)
 	return err
