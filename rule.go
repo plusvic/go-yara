@@ -215,6 +215,7 @@ func (r *Rule) getMatchStrings() (matchstrings []MatchString) {
 				Name:   s.Identifier(),
 				Offset: uint64(m.Offset()),
 				Data:   m.Data(),
+				Length: uint64(m.Length()),
 			})
 		}
 	}

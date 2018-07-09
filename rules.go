@@ -46,6 +46,7 @@ type MatchString struct {
 	Name   string
 	Offset uint64
 	Data   []byte
+	Length uint64
 }
 
 // scanContext holds data required during the scan of a single memory buffer
