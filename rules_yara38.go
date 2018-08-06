@@ -26,7 +26,7 @@ func (r ByCostDesc) Less(i, j int) bool {
 // RuleCost contains information about the time cost of a Rule.
 type RuleCost struct {
 	Rule       Rule
-	Cost       uint64
+	Cost       int64
 	Percentage float64
 }
 
@@ -44,7 +44,7 @@ func (r *Rules) GetMostCostlyRules(n int) []RuleCost {
 		}
 		result = append(result, RuleCost{
 			Rule:       rule,
-			Cost:       uint64(rule.cptr.time_cost),
+			Cost:       int64(rule.cptr.time_cost),
 			Percentage: float64(rule.cptr.time_cost) / float64(r.cptr.time_cost) * 100,
 		})
 	}
